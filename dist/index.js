@@ -32951,7 +32951,7 @@ function getSpanContext(context) {
  */
 var VALID_TRACEID_REGEX = /^([0-9a-f]{32})$/i;
 var VALID_SPANID_REGEX = /^[0-9a-f]{16}$/i;
-function isValidTraceId(traceId) {
+function isValidTraceId$1(traceId) {
     return VALID_TRACEID_REGEX.test(traceId) && traceId !== INVALID_TRACEID;
 }
 function isValidSpanId(spanId) {
@@ -32962,7 +32962,7 @@ function isValidSpanId(spanId) {
  * @return true if this {@link SpanContext} is valid.
  */
 function isSpanContextValid(spanContext) {
-    return (isValidTraceId(spanContext.traceId) && isValidSpanId(spanContext.spanId));
+    return (isValidTraceId$1(spanContext.traceId) && isValidSpanId(spanContext.spanId));
 }
 /**
  * Wrap the given {@link SpanContext} in a new non-recording {@link Span}
@@ -33916,7 +33916,7 @@ var esm$4 = /*#__PURE__*/Object.freeze({
 	diag: diag,
 	isSpanContextValid: isSpanContextValid,
 	isValidSpanId: isValidSpanId,
-	isValidTraceId: isValidTraceId,
+	isValidTraceId: isValidTraceId$1,
 	metrics: metrics,
 	propagation: propagation,
 	trace: trace
@@ -34032,24 +34032,55 @@ function annotationsToAttributes(annotations) {
     return attributes;
 }
 
-async function traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels) {
+function generateRandomSpanId() {
+    const chars = "0123456789abcdef";
+    let spanId = "";
+    for (let i = 0; i < 16; i++) {
+        spanId += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return spanId;
+}
+function isValidTraceId(traceId) {
+    return /^[0-9a-f]{32}$/i.test(traceId);
+}
+async function traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels, parentTraceId) {
     const tracer = trace.getTracer("otel-cicd-action");
     const startTime = new Date(workflowRun.run_started_at ?? workflowRun.created_at);
     const attributes = workflowRunToAttributes(workflowRun, prLabels);
-    return await tracer.startActiveSpan(workflowRun.name ?? workflowRun.display_title, { attributes, root: true, startTime }, async (rootSpan) => {
-        const code = workflowRun.conclusion === "failure" ? SpanStatusCode.ERROR : SpanStatusCode.OK;
-        rootSpan.setStatus({ code });
-        if (jobs.length > 0) {
-            // "Queued" span represent the time between the workflow has been started_at and
-            // the first job has been picked up by a runner
-            const queuedSpan = tracer.startSpan("Queued", { startTime }, context.active());
-            queuedSpan.end(new Date(jobs[0].started_at));
+    // If parentTraceId is provided, create a parent context
+    let spanContext;
+    let parentContext = context.active();
+    if (parentTraceId) {
+        if (!isValidTraceId(parentTraceId)) {
+            throw new Error(`Invalid parentTraceId format: "${parentTraceId}". Expected 32 hexadecimal characters.`);
         }
-        for (const job of jobs) {
-            await traceJob(job, jobAnnotations[job.id]);
-        }
-        rootSpan.end(new Date(workflowRun.updated_at));
-        return rootSpan.spanContext().traceId;
+        spanContext = {
+            traceId: parentTraceId.toLowerCase(),
+            spanId: generateRandomSpanId(),
+            traceFlags: TraceFlags.SAMPLED,
+            isRemote: true,
+        };
+        parentContext = trace.setSpanContext(parentContext, spanContext);
+    }
+    const spanOptions = parentTraceId
+        ? { attributes, startTime }
+        : { attributes, root: true, startTime };
+    return await context.with(parentContext, async () => {
+        return await tracer.startActiveSpan(workflowRun.name ?? workflowRun.display_title, spanOptions, async (rootSpan) => {
+            const code = workflowRun.conclusion === "failure" ? SpanStatusCode.ERROR : SpanStatusCode.OK;
+            rootSpan.setStatus({ code });
+            if (jobs.length > 0) {
+                // "Queued" span represent the time between the workflow has been started_at and
+                // the first job has been picked up by a runner
+                const queuedSpan = tracer.startSpan("Queued", { startTime }, context.active());
+                queuedSpan.end(new Date(jobs[0].started_at));
+            }
+            for (const job of jobs) {
+                await traceJob(job, jobAnnotations[job.id]);
+            }
+            rootSpan.end(new Date(workflowRun.updated_at));
+            return rootSpan.spanContext().traceId;
+        });
     });
 }
 function workflowRunToAttributes(workflowRun, prLabels) {
@@ -66343,7 +66374,7 @@ var TraceIdRatioBasedSampler$1 = /** @class */ (function () {
     }
     TraceIdRatioBasedSampler.prototype.shouldSample = function (context, traceId) {
         return {
-            decision: isValidTraceId(traceId) && this._accumulate(traceId) < this._upperBound
+            decision: isValidTraceId$1(traceId) && this._accumulate(traceId) < this._upperBound
                 ? SamplingDecision$1.RECORD_AND_SAMPLED
                 : SamplingDecision$1.NOT_RECORD,
         };
@@ -83042,7 +83073,7 @@ var TraceIdRatioBasedSampler = /** @class */ (function () {
     }
     TraceIdRatioBasedSampler.prototype.shouldSample = function (context, traceId) {
         return {
-            decision: isValidTraceId(traceId) && this._accumulate(traceId) < this._upperBound
+            decision: isValidTraceId$1(traceId) && this._accumulate(traceId) < this._upperBound
                 ? SamplingDecision.RECORD_AND_SAMPLED
                 : SamplingDecision.NOT_RECORD,
         };
@@ -84261,7 +84292,11 @@ async function run() {
         const otelServiceName = coreExports.getInput("otelServiceName") || process.env["OTEL_SERVICE_NAME"] || "";
         const runId = Number.parseInt(coreExports.getInput("runId") || `${githubExports.context.runId}`);
         const extraAttributes = stringToRecord(coreExports.getInput("extraAttributes"));
+        const parentTraceId = coreExports.getInput("parentTraceId") || undefined;
         const ghToken = coreExports.getInput("githubToken") || process.env["GITHUB_TOKEN"] || "";
+        if (parentTraceId) {
+            coreExports.info(`Parent traceId provided: ${parentTraceId}`);
+        }
         coreExports.info("Use Github API to fetch workflow data");
         const { workflowRun, jobs, jobAnnotations, prLabels } = await fetchGithub(ghToken, runId);
         coreExports.info(`Create tracer provider for ${otlpEndpoint}`);
@@ -84279,7 +84314,7 @@ async function run() {
         };
         const provider = createTracerProvider(otlpEndpoint, otlpHeaders, attributes);
         coreExports.info(`Trace workflow run for ${runId} and export to ${otlpEndpoint}`);
-        const traceId = await traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels);
+        const traceId = await traceWorkflowRun(workflowRun, jobs, jobAnnotations, prLabels, parentTraceId);
         coreExports.setOutput("traceId", traceId);
         coreExports.info(`traceId: ${traceId}`);
         coreExports.info("Flush and shutdown tracer provider");
