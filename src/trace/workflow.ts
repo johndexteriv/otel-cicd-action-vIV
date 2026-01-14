@@ -1,12 +1,5 @@
 import type { components } from "@octokit/openapi-types";
-import {
-  type Attributes,
-  SpanStatusCode,
-  SpanContext,
-  TraceFlags,
-  context,
-  trace,
-} from "@opentelemetry/api";
+import { type Attributes, type SpanContext, SpanStatusCode, TraceFlags, context, trace } from "@opentelemetry/api";
 import { ATTR_CICD_PIPELINE_NAME, ATTR_CICD_PIPELINE_RUN_ID } from "@opentelemetry/semantic-conventions/incubating";
 import { traceJob } from "./job";
 
@@ -41,9 +34,7 @@ async function traceWorkflowRun(
 
   if (parentTraceId) {
     if (!isValidTraceId(parentTraceId)) {
-      throw new Error(
-        `Invalid parentTraceId format: "${parentTraceId}". Expected 32 hexadecimal characters.`,
-      );
+      throw new Error(`Invalid parentTraceId format: "${parentTraceId}". Expected 32 hexadecimal characters.`);
     }
 
     spanContext = {
@@ -60,33 +51,30 @@ async function traceWorkflowRun(
     ? { attributes, startTime }
     : { attributes, root: true, startTime };
 
-  return await context.with(
-    parentContext,
-    async () => {
-      return await tracer.startActiveSpan(
-        workflowRun.name ?? workflowRun.display_title,
-        spanOptions,
-        async (rootSpan) => {
-      const code = workflowRun.conclusion === "failure" ? SpanStatusCode.ERROR : SpanStatusCode.OK;
-      rootSpan.setStatus({ code });
+  return await context.with(parentContext, async () => {
+    return await tracer.startActiveSpan(
+      workflowRun.name ?? workflowRun.display_title,
+      spanOptions,
+      async (rootSpan) => {
+        const code = workflowRun.conclusion === "failure" ? SpanStatusCode.ERROR : SpanStatusCode.OK;
+        rootSpan.setStatus({ code });
 
-      if (jobs.length > 0) {
-        // "Queued" span represent the time between the workflow has been started_at and
-        // the first job has been picked up by a runner
-        const queuedSpan = tracer.startSpan("Queued", { startTime }, context.active());
-        queuedSpan.end(new Date(jobs[0].started_at));
-      }
+        if (jobs.length > 0) {
+          // "Queued" span represent the time between the workflow has been started_at and
+          // the first job has been picked up by a runner
+          const queuedSpan = tracer.startSpan("Queued", { startTime }, context.active());
+          queuedSpan.end(new Date(jobs[0].started_at));
+        }
 
-      for (const job of jobs) {
-        await traceJob(job, jobAnnotations[job.id]);
-      }
+        for (const job of jobs) {
+          await traceJob(job, jobAnnotations[job.id]);
+        }
 
-      rootSpan.end(new Date(workflowRun.updated_at));
-      return rootSpan.spanContext().traceId;
-        },
-      );
-    },
-  );
+        rootSpan.end(new Date(workflowRun.updated_at));
+        return rootSpan.spanContext().traceId;
+      },
+    );
+  });
 }
 
 function workflowRunToAttributes(
