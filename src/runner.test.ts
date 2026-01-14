@@ -46,6 +46,8 @@ describe("run", () => {
           return token;
         case "extraAttributes":
           return "extra.attribute=1,key2=value2";
+        case "parentTraceId":
+          return ""; // Will be overridden in specific tests
         default:
           return "";
       }
@@ -67,6 +69,27 @@ describe("run", () => {
     output = "";
     core.setOutput.mockReset();
     core.setFailed.mockReset();
+    // Reset mock implementation to default
+    core.getInput.mockImplementation((name: string) => {
+      switch (name) {
+        case "otlpEndpoint":
+          return "";
+        case "otlpHeaders":
+          return "";
+        case "otelServiceName":
+          return "otel-cicd-action";
+        case "runId":
+          return runId;
+        case "githubToken":
+          return token;
+        case "extraAttributes":
+          return "extra.attribute=1,key2=value2";
+        case "parentTraceId":
+          return ""; // Will be overridden in specific tests
+        default:
+          return "";
+      }
+    });
   });
 
   it("should run a successful workflow", async () => {
@@ -115,6 +138,73 @@ describe("run", () => {
     expect(output).toBe("");
     expect(core.setFailed).toHaveBeenCalledTimes(1);
     expect(core.setFailed).toHaveBeenCalledWith(expect.any(RequestError));
+    expect(core.setOutput).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("should run with valid parentTraceId", async () => {
+    // https://github.com/biomejs/biome/actions/runs/12541749172
+    process.env["GITHUB_REPOSITORY"] = "biomejs/biome";
+    runId = "12541749172";
+    core.getInput.mockImplementation((name: string) => {
+      if (name === "parentTraceId") {
+        return "329e58aa53cec7a2beadd2fd0a85c388"; // Valid 32-char hex string
+      }
+      switch (name) {
+        case "otlpEndpoint":
+          return "";
+        case "otlpHeaders":
+          return "";
+        case "otelServiceName":
+          return "otel-cicd-action";
+        case "runId":
+          return runId;
+        case "githubToken":
+          return token;
+        case "extraAttributes":
+          return "extra.attribute=1,key2=value2";
+        default:
+          return "";
+      }
+    });
+
+    await run();
+
+    expect(core.setFailed).not.toHaveBeenCalled();
+    expect(core.setOutput).toHaveBeenCalledWith("traceId", expect.any(String));
+  }, 10000);
+
+  it("should fail with invalid parentTraceId", async () => {
+    // https://github.com/biomejs/biome/actions/runs/12541749172
+    process.env["GITHUB_REPOSITORY"] = "biomejs/biome";
+    runId = "12541749172";
+    core.getInput.mockImplementation((name: string) => {
+      if (name === "parentTraceId") {
+        return "invalid-trace-id"; // Invalid format
+      }
+      switch (name) {
+        case "otlpEndpoint":
+          return "";
+        case "otlpHeaders":
+          return "";
+        case "otelServiceName":
+          return "otel-cicd-action";
+        case "runId":
+          return runId;
+        case "githubToken":
+          return token;
+        case "extraAttributes":
+          return "extra.attribute=1,key2=value2";
+        default:
+          return "";
+      }
+    });
+
+    await run();
+
+    expect(core.setFailed).toHaveBeenCalledTimes(1);
+    expect(core.setFailed).toHaveBeenCalledWith(
+      expect.stringContaining('Invalid parentTraceId format: "invalid-trace-id"'),
+    );
     expect(core.setOutput).not.toHaveBeenCalled();
   }, 10000);
 });
