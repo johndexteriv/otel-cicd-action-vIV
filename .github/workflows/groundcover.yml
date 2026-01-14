@@ -1,0 +1,42 @@
+name: Export CI Trace
+
+on:
+  workflow_run:
+    workflows: 
+        - "workflow_name_to_trace_here"
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  checks: read
+
+jobs:
+  export-trace:
+    runs-on: ubuntu-latest
+    steps:
+      # Optional sanity check so we don't accidentally send an empty header
+      - name: Sanity check secret is set
+        run: |
+          if [ -z "${{ secrets.APIKEY }}" ]; then
+            echo "APIKEY is empty"; exit 1
+          else
+            echo "APIKEY is present"
+          fi
+
+      - name: Export Workflow Trace to Groundcover (OTLP gRPC)
+        id: export-trace
+        uses: johndexteriv/otel-cicd-action-vIV
+        with:
+          # Export the completed CI run (not this exporter run)
+          runId: ${{ github.event.workflow_run.id }}
+
+          # Token with actions/contents/checks read
+          githubToken: ${{ github.token }}
+
+          # Endpoint + headers
+          otlpEndpoint: https://www.groundcover.com/v1/traces
+          otlpHeaders: apikey=${{ secrets.APIKEY }},Authorization=Bearer ${{ secrets.APIKEY }}
+
+      - name: Show trace id
+        run: echo "traceId=${{ steps.export-trace.outputs.traceId }}"
